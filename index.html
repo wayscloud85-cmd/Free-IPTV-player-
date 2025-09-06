@@ -1,0 +1,155 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IPTV Grid Player</title>
+<style>
+body { margin:0; font-family:Arial,sans-serif; background:#111; color:#fff; }
+header { background:#222; color:#ff6600; padding:1rem; text-align:center; font-size:1.5rem; font-weight:bold; }
+
+.screen { display:none; height:calc(100vh - 60px); }
+.active { display:block; }
+
+.top-controls { padding:10px; display:flex; gap:10px; background:#1a1a1a; }
+input[type=text] { flex:1; padding:8px; border-radius:4px; border:1px solid #444; background:#333; color:#fff; }
+button { padding:8px 12px; background:#ff6600; border:none; border-radius:4px; cursor:pointer; color:#fff; font-weight:bold; }
+button:hover { background:#ff8833; }
+
+.channel-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px; padding:12px; overflow-y:auto; height:calc(100% - 50px); }
+.channel-card { background:#222; border-radius:8px; padding:10px; text-align:center; cursor:pointer; transition:0.3s; }
+.channel-card:hover { background:#333; transform:scale(1.05); }
+.channel-card img { width:100%; height:80px; object-fit:contain; border-radius:4px; margin-bottom:6px; }
+.channel-card span { display:block; font-size:0.9rem; color:#fff; }
+
+.video-screen { display:flex; flex-direction:column; height:100%; }
+.video-wrapper { flex:1; background:#000; position:relative; border-radius:8px; overflow:hidden; }
+video { width:100%; height:100%; object-fit:contain; background:#000; }
+.now-playing { text-align:center; padding:8px; color:#ff6600; font-size:1.2rem; }
+.loading { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:#fff; display:none; font-size:1.2rem; }
+.error { text-align:center; color:#ff3333; margin-top:5px; }
+.back-btn { background:#ff6600; border:none; padding:8px 14px; margin:10px; border-radius:6px; color:#fff; font-weight:bold; cursor:pointer; }
+.back-btn:hover { background:#ff8833; }
+</style>
+</head>
+<body>
+
+<header>📺 IPTV Grid Player</header>
+
+<!-- Screen 1: Channel Grid -->
+<div id="gridScreen" class="screen active">
+  <div class="top-controls">
+    <input type="text" id="playlistUrl" placeholder="Enter M3U/M3U8 playlist URL">
+    <button id="loadPlaylist">Load Playlist</button>
+  </div>
+  <div class="channel-grid" id="channelGrid"></div>
+</div>
+
+<!-- Screen 2: Video Player -->
+<div id="playerScreen" class="screen">
+  <button class="back-btn" onclick="goBack()">⬅ Back to Channels</button>
+  <div class="video-screen">
+    <div class="video-wrapper">
+      <video id="videoPlayer" controls></video>
+      <div id="loading" class="loading">Loading...</div>
+    </div>
+    <div class="now-playing" id="nowPlaying">Now Playing...</div>
+    <div id="error" class="error"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script>
+let hls;
+const video=document.getElementById('videoPlayer');
+const loading=document.getElementById('loading');
+const nowPlaying=document.getElementById('nowPlaying');
+const errorElement=document.getElementById('error');
+const channelGrid=document.getElementById('channelGrid');
+
+const gridScreen=document.getElementById('gridScreen');
+const playerScreen=document.getElementById('playerScreen');
+
+const playlistUrlInput=document.getElementById('playlistUrl');
+const loadPlaylistButton=document.getElementById('loadPlaylist');
+
+let channels=[];
+
+// Default playlist (Pakistan)
+const defaultPlaylist='https://iptv-org.github.io/iptv/countries/pk.m3u';
+playlistUrlInput.value=defaultPlaylist;
+loadPlaylist(defaultPlaylist);
+
+// Load playlist button
+loadPlaylistButton.addEventListener('click',()=>{
+  const url=playlistUrlInput.value.trim();
+  if(url) loadPlaylist(url);
+});
+
+// Load playlist
+function loadPlaylist(url){
+  errorElement.textContent=''; loading.style.display='block'; channels=[]; channelGrid.innerHTML='';
+  fetch(url).then(r=>r.text()).then(data=>{
+    const lines=data.split('\n'); let tempChannel={};
+    lines.forEach((line,index)=>{
+      line=line.trim();
+      if(line.startsWith('#EXTINF')){
+        const nameMatch=line.match(/,(.*)$/);
+        const logoMatch=line.match(/tvg-logo="([^"]+)"/);
+        tempChannel={ name:nameMatch?nameMatch[1]:`Channel ${index+1}`, logo:logoMatch?logoMatch[1]:'https://via.placeholder.com/150x100?text=TV'};
+      } else if(line && !line.startsWith('#')){
+        tempChannel.url=line; channels.push({...tempChannel}); tempChannel={};
+      }
+    });
+    if(channels.length===0)throw new Error('No channels found'); displayChannels();
+    loading.style.display='none';
+  }).catch(err=>{errorElement.textContent='Error loading playlist'; console.error(err); loading.style.display='none';});
+}
+
+// Display channels in grid
+function displayChannels(){
+  channelGrid.innerHTML='';
+  channels.forEach((ch)=>{
+    const div=document.createElement('div');
+    div.className='channel-card';
+    div.innerHTML=`<img src="${ch.logo}" alt="${ch.name}"><span>${ch.name}</span>`;
+    div.addEventListener('click',()=>playChannel(ch));
+    channelGrid.appendChild(div);
+  });
+}
+
+// Play channel
+function playChannel(channel){
+  switchScreen('player');
+  errorElement.textContent=''; loading.style.display='block';
+  nowPlaying.textContent=`Now Playing: ${channel.name}`;
+  if(hls){hls.destroy(); hls=null;}
+  if(Hls.isSupported()){
+    hls=new Hls(); hls.loadSource(channel.url); hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>{loading.style.display='none'; video.play().catch(()=>{});});
+  } else if(video.canPlayType('application/vnd.apple.mpegurl')){
+    video.src=channel.url; video.addEventListener('loadedmetadata',()=>loading.style.display='none');
+  } else {
+    errorElement.textContent='Your browser does not support HLS'; loading.style.display='none';
+  }
+}
+
+// Switch between grid and player
+function switchScreen(screen){
+  gridScreen.classList.remove('active');
+  playerScreen.classList.remove('active');
+  if(screen==='grid')gridScreen.classList.add('active');
+  else playerScreen.classList.add('active');
+}
+
+// Go back
+function goBack(){
+  switchScreen('grid');
+  if(hls){hls.destroy(); hls=null;}
+  video.pause(); video.src='';
+}
+</script>
+
+</body>
+</html>
